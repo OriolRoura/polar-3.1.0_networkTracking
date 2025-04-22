@@ -1,0 +1,22 @@
+{
+  "extends": ["config:js-app"],
+  "rangeStrategy": "bump",
+  "automerge": true,
+  "automergeType": "branch",
+  "ignoreDeps": [
+    "babel-eslint",
+    "babel-jest",
+    "babel-loader",
+    "electron-log",
+    "electron-debug",
+    "eslint",
+    "jest",
+    "shell-env",
+    "webpack",
+    "webpack-dev-server",
+    "electron",
+    "electron-is-dev",
+    "docker-compose",
+    "react-error-overlay"
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "appId": "com.polarlightning.app",
+  "productName": "Polar",
+  "copyright": "Copyright © 2019 ${author}",
+  "artifactName": "polar-${os}-${arch}-v${version}.${ext}",
+  "files": ["build/**/*", "assets/**/*", "node_modules/**/*", "node_modules/**/*.proto"],
+  "directories": {
+    "buildResources": "assets"
+  },
+  "mac": {
+    "category": "public.app-category.utilities",
+    "target": ["dmg"]
+  },
+  "dmg": {
+    "contents": [
+      {
+        "x": 130,
+        "y": 220
+      },
+      {
+        "x": 410,
+        "y": 220,
+        "type": "link",
+        "path": "/Applications"
+      }
+    ]
+  },
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ]
+  },
+  "linux": {
+    "target": [
+      {
+        "target": "deb",
+        "arch": ["x64"]
+      },
+      {
+        "target": "rpm",
+        "arch": ["x64"]
+      },
+      {
+        "target": "AppImage",
+        "arch": ["x64"]
+      }
+    ],
+    "category": "Development"
+  },
+  "publish": {
+    "provider": "github",
+    "owner": "jamaljsr",
+    "repo": "polar",
+    "private": false
+  },
+  "extends": null
+}
