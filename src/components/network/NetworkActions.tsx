@@ -135,6 +135,7 @@ const NetworkActions: React.FC<Props> = ({
           <Button
             icon={<EyeOutlined />}
             onClick={() => showNetworkMonitoring({ networkId: network.id })}
+            style={{ marginLeft: '9px' }}
           >
             {/* {l('monitorNetworkBtn')} need to add the translation */}
             monitoring button

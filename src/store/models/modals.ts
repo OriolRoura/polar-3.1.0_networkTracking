@@ -485,6 +485,7 @@ const modalsModel: ModalsModel = {
     });
   }),
   setNetworkMonitoring: action((state, payload) => {
+    console.log('setNetworkMonitoring called with:', payload);
     state.networkMonitoring = {
       ...state.networkMonitoring,
       ...payload,

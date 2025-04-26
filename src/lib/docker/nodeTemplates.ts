@@ -186,7 +186,7 @@ export const controller = (networkId: number): ComposeService => ({
   image: 'oriolrourajimenez/project-central-dump-control:latest',
   container_name: `polar-n${networkId}-control`,
   hostname: `control`,
-  ports: ['3000:3000'], // Map control service port
+  ports: [`500${networkId}:3000`], // changt
   volumes: ['./volumes/shared_data:/data'], // Adjust volume path as needed
   command: '', // Default command
   expose: [], // Default expose
