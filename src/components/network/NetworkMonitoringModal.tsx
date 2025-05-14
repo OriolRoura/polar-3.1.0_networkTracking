@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Modal, Typography, Button, Input, Form, Select } from 'antd'; // Import Input, Form, and Select components
-import ReactJson from 'react-json-view';
+import ReactJson from 'react-json-view'; // Import ReactJson
 //import { usePrefixedTranslation } from 'hooks';
 import { useStoreActions, useStoreState } from 'store';
 
@@ -8,22 +8,144 @@ const { Text, Title } = Typography;
 const fs = window.require('fs');
 const path = window.require('path');
 
-const fetchJsonData = async (setJsonData: React.Dispatch<React.SetStateAction<any>>) => {
-  try {
-    const jsonFilePath = path.join(
-      'C:/Users/Oriol/.polar/networks/2/volumes/shared_data/output.json',
-    );
+interface NetworkMonitoringModalProps {
+  networkId: number; // Add networkId as a prop
+}
+
+const fetchJsonData = async (
+  setJsonData: React.Dispatch<React.SetStateAction<any>>,
+  networkId: number, // Accept networkId as a parameter
+) => {
+  const jsonFilePath = path.join(
+    `C:/Users/Oriol/.polar/networks/${networkId}/volumes/shared_data/output.json`, // Use dynamic networkId
+  );
+
+  if (fs.existsSync(jsonFilePath)) {
+    // File exists, proceed to read and parse it
     const fileContent = fs.readFileSync(jsonFilePath, 'utf-8');
     const data = JSON.parse(fileContent);
     setJsonData(data);
-  } catch (error) {
-    console.error('Failed to load JSON data:', error);
+  } else {
+    setJsonData(null);
   }
 };
 
 const packetTypeOptions = ['TCP', 'UDP', 'ICMP', 'ARP']; // Predefined packet types
 
-const NetworkMonitoringModal: React.FC = () => {
+const renderJsonData = (
+  data: any,
+  expandedState: boolean[],
+  toggleExpanded: (index: number) => void,
+) => {
+  if (!Array.isArray(data)) return <Text type="secondary">No data available</Text>;
+
+  return (
+    <div
+      style={{
+        maxHeight: '50vh',
+        overflowY: 'auto',
+        border: '1px solid #ddd',
+        borderRadius: '8px',
+        padding: '10px',
+        background: '#1f1f1f', // Match modal background
+      }}
+    >
+      {data.map((item: any, index: number) => {
+        const layers = item?._source?.layers || {};
+        const summary = {
+          utcTime: layers?.frame?.['frame.time'] || 'N/A',
+          srcIp: layers?.ip?.['ip.src'] || 'N/A',
+          dstIp: layers?.ip?.['ip.dst'] || 'N/A',
+          messageType: layers?.frame?.['frame.protocols']?.split(':').pop() || 'N/A',
+          packetSize: layers?.frame?.['frame.len'] || 'N/A', // Add packet size
+        };
+
+        return (
+          <div
+            key={index}
+            style={{
+              marginBottom: '10px',
+              border: '1px solid #ccc',
+              borderRadius: '5px',
+              padding: '10px',
+              background: '#2d2d2d', // Slightly lighter background for each item
+            }}
+          >
+            <div
+              style={{
+                cursor: 'pointer',
+                fontWeight: 'bold',
+                color: '#1890ff',
+              }}
+              onClick={() => toggleExpanded(index)}
+            >
+              {expandedState[index] ? '▼' : '▶'}{' '}
+              <span style={{ color: '#ffcc00' }}>UTC Time:</span>{' '}
+              <span style={{ color: '#f0f0f0', fontWeight: 'normal' }}>
+                {summary.utcTime}
+              </span>
+              , <span style={{ color: '#ffcc00' }}>Src IP:</span>{' '}
+              <span style={{ color: '#66ff66', fontWeight: 'normal' }}>
+                {summary.srcIp}
+              </span>
+              , <span style={{ color: '#ffcc00' }}>Dst IP:</span>{' '}
+              <span style={{ color: '#66ccff', fontWeight: 'normal' }}>
+                {summary.dstIp}
+              </span>
+              , <span style={{ color: '#ffcc00' }}>Message Type:</span>{' '}
+              <span style={{ color: '#ff9966', fontWeight: 'normal' }}>
+                {summary.messageType}
+              </span>
+              , <span style={{ color: '#ffcc00' }}>Packet Size:</span>{' '}
+              <span style={{ color: '#f0f0f0', fontWeight: 'normal' }}>
+                {summary.packetSize}
+              </span>
+            </div>
+            {expandedState[index] && (
+              <div
+                style={{
+                  marginTop: '10px',
+                  background: '#1f1f1f', // Match modal background
+                  padding: '10px',
+                  borderRadius: '5px',
+                  overflowX: 'auto',
+                }}
+              >
+                <ReactJson
+                  src={item}
+                  collapsed={3} // Collapse nodes at the fourth level onwards
+                  enableClipboard={true} // Allow copying to clipboard
+                  theme={{
+                    base00: '#1f1f1f', // Match modal background
+                    base01: '#2d2d2d', // Slightly lighter background for nested elements
+                    base02: '#3c3c3c', // Borders
+                    base03: '#c5c5c5', // Comments, keys (light gray)
+                    base04: '#f0f0f0', // Strings (white)
+                    base05: '#ffcc00', // Numbers (yellow)
+                    base06: '#ff6666', // Booleans (red)
+                    base07: '#66ff66', // Null (green)
+                    base08: '#66ccff', // Undefined (blue)
+                    base09: '#ff9966', // Additional color for customization (orange)
+                    base0A: '#ff66ff', // Additional color for customization (pink)
+                    base0B: '#66ffff', // Additional color for customization (cyan)
+                    base0C: '#ffff66', // Additional color for customization (light yellow)
+                    base0D: '#cc99ff', // Additional color for customization (purple)
+                    base0E: '#99ccff', // Additional color for customization (light blue)
+                    base0F: '#999999', // Additional color for customization (gray)
+                  }} // Custom theme for dark background
+                  displayDataTypes={false} // Hide data types for cleaner display
+                  name={false} // Hide the root key
+                />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const NetworkMonitoringModal: React.FC<NetworkMonitoringModalProps> = ({ networkId }) => {
   //const { l } = usePrefixedTranslation('cmps.network.NetworkMonitoringModal');
   const { visible } = useStoreState(s => s.modals.networkMonitoring);
   const { hideNetworkMonitoring } = useStoreActions(s => s.modals);
@@ -48,12 +170,19 @@ const NetworkMonitoringModal: React.FC = () => {
     payloadContent: '',
     macAddress: '',
   }); // Store configuration fields
+  const [expandedState, setExpandedState] = useState<boolean[]>([]);
 
   useEffect(() => {
     if (visible) {
-      fetchJsonData(setJsonData);
+      fetchJsonData(setJsonData, networkId); // Pass networkId to fetchJsonData
     }
-  }, [visible]);
+  }, [visible, networkId]);
+
+  useEffect(() => {
+    if (jsonData && Array.isArray(jsonData)) {
+      setExpandedState(new Array(jsonData.length).fill(false)); // Initialize expanded state for all items
+    }
+  }, [jsonData]);
 
   const handleButtonClick = async () => {
     setIsButtonDisabled(true); // Disable button
@@ -65,7 +194,7 @@ const NetworkMonitoringModal: React.FC = () => {
         console.log('State toggled successfully');
         if (isRunning) {
           // Stop mode: Reload JSON data
-          await fetchJsonData(setJsonData);
+          await fetchJsonData(setJsonData, networkId);
         } else {
           // Start mode: Clear JSON data
           setJsonData(null);
@@ -87,6 +216,14 @@ const NetworkMonitoringModal: React.FC = () => {
 
   const handlePacketTypeChange = (values: string[]) => {
     setConfig(prev => ({ ...prev, packetType: values.join(', ') })); // Store selected packet types as a comma-separated string
+  };
+
+  const toggleExpanded = (index: number) => {
+    setExpandedState(prevState => {
+      const newState = [...prevState];
+      newState[index] = !newState[index];
+      return newState;
+    });
   };
 
   const isTcpSelected = config.packetType.split(', ').includes('TCP'); // Check if TCP is selected
@@ -234,47 +371,7 @@ const NetworkMonitoringModal: React.FC = () => {
             </Form.Item>
           </Form>
         ) : jsonData ? (
-          <div
-            style={{
-              maxHeight: '50vh', // Ensure this is relative to the modal's height
-              overflowY: 'auto',
-              border: '1px solid #ddd',
-              borderRadius: '8px', // Added border radius for rounded corners
-              padding: '10px',
-            }}
-          >
-            <ReactJson
-              src={jsonData}
-              collapsed={1} // Collapse nodes up to depth 1
-              shouldCollapse={({ src, type }) => {
-                // Customize the folded display
-                if (type === 'object' && src && Object.keys(src).length > 5) {
-                  return true; // Collapse objects with more than 5 keys
-                }
-                return false; // Default behavior
-              }}
-              enableClipboard={false}
-              theme={{
-                base00: '#1f1f1f', // Dark background color
-                base01: '#2d2d2d', // Slightly lighter background for nested elements
-                base02: '#3c3c3c', // Borders
-                base03: '#c5c5c5', // Comments, keys (light gray)
-                base04: '#f0f0f0', // Strings (white)
-                base05: '#ffcc00', // Numbers (yellow)
-                base06: '#ff6666', // Booleans (red)
-                base07: '#66ff66', // Null (green)
-                base08: '#66ccff', // Undefined (blue)
-                base09: '#ff9966', // Additional color for customization (orange)
-                base0A: '#ff66ff', // Additional color for customization (pink)
-                base0B: '#66ffff', // Additional color for customization (cyan)
-                base0C: '#ffff66', // Additional color for customization (light yellow)
-                base0D: '#cc99ff', // Additional color for customization (purple)
-                base0E: '#99ccff', // Additional color for customization (light blue)
-                base0F: '#999999', // Additional color for customization (gray)
-              }} // Custom theme for dark background
-              name={false} // Hide the root key
-            />
-          </div>
+          renderJsonData(jsonData, expandedState, toggleExpanded) // Pass expanded state and toggle function
         ) : (
           <Text type="secondary">Loading JSON data...</Text>
         )}

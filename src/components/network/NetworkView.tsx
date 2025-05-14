@@ -253,7 +253,8 @@ const NetworkView: React.FC<RouteComponentProps<MatchParams>> = ({ match }) => {
         />
       )}
       <Styled.NetworkDesigner network={network} />
-      <NetworkMonitoringModal /> {/* todo O: This is currently temporary */}
+      <NetworkMonitoringModal networkId={networkId} />
+      {/* todo O: This is currently temporary */}
     </Styled.NetworkView>
   );
 };
