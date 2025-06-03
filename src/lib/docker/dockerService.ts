@@ -132,22 +132,22 @@ class DockerService implements DockerLibrary {
       if (node.implementation === 'LND') {
         const lnd = node as LndNode;
         const backend = bitcoin.find(n => n.name === lnd.backendName) || bitcoin[0];
-        file.addLnd(lnd, backend, network.id);
+        file.addLnd(lnd, backend);
       }
       if (node.implementation === 'c-lightning') {
         const cln = node as CLightningNode;
         const backend = bitcoin.find(n => n.name === cln.backendName) || bitcoin[0];
-        file.addClightning(cln, backend, network.id);
+        file.addClightning(cln, backend);
       }
       if (node.implementation === 'eclair') {
         const eclair = node as EclairNode;
         const backend = bitcoin.find(n => n.name === eclair.backendName) || bitcoin[0];
-        file.addEclair(eclair, backend, network.id);
+        file.addEclair(eclair, backend);
       }
       if (node.implementation === 'litd') {
         const litd = node as LitdNode;
         const backend = bitcoin.find(n => n.name === litd.backendName) || bitcoin[0];
-        file.addLitd(litd, backend, network.id);
+        file.addLitd(litd, backend);
       }
     });
     tap.forEach(node => {
@@ -156,7 +156,7 @@ class DockerService implements DockerLibrary {
         const lndBackend =
           lightning.find(n => n.name === tapd.lndName) ||
           lightning.filter(n => n.implementation === 'LND')[0];
-        file.addTapd(tapd, lndBackend as LndNode, network.id);
+        file.addTapd(tapd, lndBackend as LndNode);
       }
     });
     file.addController(network.id);
@@ -199,14 +199,26 @@ class DockerService implements DockerLibrary {
    */
   async startNode(network: Network, node: CommonNode) {
     await this.ensureDirs(network, [node]);
-    // make sure the docker container is stopped. If it is already started in an error state
-    // then starting it would have no effect
     await this.stopNode(network, node);
 
     info(`Starting docker container for ${node.name}`);
     info(` - path: ${network.path}`);
     const result = await this.execute(compose.upOne, node.name, this.getArgs(network));
     info(`Container started:\n ${result.out || result.err}`);
+
+    // Use the correct monitoring container name
+    const monitorServiceName = `polar-n${network.id}-${node.name}-monitor`;
+    info(`Starting monitoring container for ${node.name}`);
+    try {
+      const monitorResult = await this.execute(
+        compose.upOne,
+        monitorServiceName,
+        this.getArgs(network),
+      );
+      info(`Monitoring container started:\n ${monitorResult.out || monitorResult.err}`);
+    } catch (e) {
+      info(`Failed to start monitoring container for ${node.name}: ${e}`);
+    }
   }
 
   /**
