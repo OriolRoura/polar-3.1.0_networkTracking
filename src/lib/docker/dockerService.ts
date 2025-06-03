@@ -1,4 +1,4 @@
-import { net, remote } from 'electron';
+import { remote } from 'electron';
 import { debug, info } from 'electron-log';
 import { copy, ensureDir } from 'fs-extra';
 import { join } from 'path';
@@ -237,6 +237,25 @@ class DockerService implements DockerLibrary {
     // IDockerComposeOptions as the first param and a spread for the remaining
     result = await this.execute(compose.rm as any, this.getArgs(network), node.name);
     info(`Removed:\n ${result.out || result.err}`);
+
+    // Remove associated monitor service if it exists
+    const monitorServiceName = `${node.name}-monitor`;
+    try {
+      result = await this.execute(
+        compose.stopOne,
+        monitorServiceName,
+        this.getArgs(network),
+      );
+      info(`Monitor container stopped:\n ${result.out || result.err}`);
+      result = await this.execute(
+        compose.rm as any,
+        this.getArgs(network),
+        monitorServiceName,
+      );
+      info(`Monitor removed:\n ${result.out || result.err}`);
+    } catch (e) {
+      // Ignore errors if monitor service does not exist
+    }
   }
 
   /**

@@ -118,6 +118,25 @@ const NetworkActions: React.FC<Props> = ({
     { key: 'delete', label: l('menuDelete'), icon: <CloseOutlined /> },
   ];
 
+  // Helper to stop monitoring before stopping the network
+  const stopMonitoringIfNeeded = async () => {
+    const port = `39${network.id.toString().padStart(3, '0')}`;
+    try {
+      // Always try to stop monitoring before stopping network
+      await fetch(`http://localhost:${port}/stop`, { method: 'GET', mode: 'no-cors' });
+    } catch {
+      // Ignore errors (monitoring might not be running)
+    }
+  };
+
+  // Wrap the onClick handler for stopping/restarting the network
+  const handlePrimaryClick = async () => {
+    if (status === Status.Started || status === Status.Error) {
+      await stopMonitoringIfNeeded();
+    }
+    onClick();
+  };
+
   return (
     <>
       {bitcoinNode.status === Status.Started && nodeState?.chainInfo && (
@@ -150,7 +169,7 @@ const NetworkActions: React.FC<Props> = ({
         icon={icon}
         loading={loading}
         ghost={started}
-        onClick={onClick}
+        onClick={handlePrimaryClick}
       >
         {l(`primaryBtn${label}`)}
       </Styled.Button>

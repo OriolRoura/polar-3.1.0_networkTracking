@@ -1,6 +1,6 @@
 import { dockerConfigs } from 'utils/constants';
 /* eslint-disable no-template-curly-in-string */
-import { ComposeService, MonitrComposeService } from './composeFile';
+import { ComposeService, MonitorComposeService } from './composeFile';
 
 // simple function to remove all line-breaks and extra white-space inside of a string
 const trimInside = (text: string): string => text.replace(/\s+/g, ' ').trim();
@@ -186,22 +186,22 @@ export const controller = (networkId: number): ComposeService => ({
   image: 'oriolrourajimenez/project-central-dump-control:latest',
   container_name: `polar-n${networkId}-control`,
   hostname: `control`,
-  ports: [`500${networkId}:3000`], // changt
-  volumes: ['./volumes/shared_data:/data'], // Adjust volume path as needed
-  command: '', // Default command
-  expose: [], // Default expose
+  ports: [`39${networkId.toString().padStart(3, '0')}:3000`],
+  volumes: ['./volumes/shared_data:/data'],
+  command: '',
+  expose: [],
 });
 
 export const monitor = (
   containerName: string,
-  networkId: number,
-): MonitrComposeService => ({
+  hostname: string,
+): MonitorComposeService => ({
   image: 'oriolrourajimenez/project-central-dump-monitoring:latest',
   container_name: `${containerName}-monitor`,
-  volumes: ['./volumes/shared_data:/data'], // Adjust volume path as needed
-  command: '', // Default command
-  expose: [], // Default expose
+  volumes: ['./volumes/shared_data:/data'],
+  command: '',
+  expose: [],
   network_mode: `container:${containerName}`,
-  depends_on: [containerName, `polar-n${networkId}-control`],
+  depends_on: [hostname, `control`],
   restart: 'always',
 });

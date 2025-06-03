@@ -1,36 +1,88 @@
-import React, { useEffect, useState } from 'react';
-import { Modal, Typography, Button, Input, Form, Select } from 'antd'; // Import Input, Form, and Select components
+import React, { useEffect, useState, useRef } from 'react';
+import { Modal, Typography, Button, Input, Form, Select, Alert, Pagination } from 'antd'; // <-- Add Alert
 import ReactJson from 'react-json-view'; // Import ReactJson
 //import { usePrefixedTranslation } from 'hooks';
 import { useStoreActions, useStoreState } from 'store';
+import { networksPath } from 'utils/config';
 
 const { Text, Title } = Typography;
 const fs = window.require('fs');
 const path = window.require('path');
+const electron = window.require('electron');
+const { dialog } = electron.remote || electron;
 
 interface NetworkMonitoringModalProps {
   networkId: number; // Add networkId as a prop
 }
 
+// Helper to get the correct JSON file path
+const getJsonFilePath = (networkId: number, configExists: boolean) => {
+  const base = path.join(networksPath, networkId.toString(), 'volumes', 'shared_data');
+  return configExists ? path.join(base, 'filtered.json') : path.join(base, 'output.json');
+};
+
+// Helper to get the correct PCAP file path and name
+const getPcapFileInfo = (networkId: number, configExists: boolean) => {
+  const base = path.join(networksPath, networkId.toString(), 'volumes', 'shared_data');
+  if (configExists) {
+    const pcapPath = path.join(base, 'filtered.pcap');
+    if (fs.existsSync(pcapPath)) return { path: pcapPath, name: 'filtered.pcap' };
+  }
+  const pcapPath = path.join(base, 'merged.pcap');
+  if (fs.existsSync(pcapPath)) return { path: pcapPath, name: 'merged.pcap' };
+  return null;
+};
+
 const fetchJsonData = async (
   setJsonData: React.Dispatch<React.SetStateAction<any>>,
-  networkId: number, // Accept networkId as a parameter
+  setLoading: React.Dispatch<React.SetStateAction<boolean>>,
+  networkId: number,
+  configExists: boolean,
+  isMountedRef?: React.MutableRefObject<boolean>,
 ) => {
-  const jsonFilePath = path.join(
-    `C:/Users/Oriol/.polar/networks/${networkId}/volumes/shared_data/output.json`, // Use dynamic networkId
-  );
-
+  setLoading(true);
+  const jsonFilePath = getJsonFilePath(networkId, configExists);
   if (fs.existsSync(jsonFilePath)) {
-    // File exists, proceed to read and parse it
     const fileContent = fs.readFileSync(jsonFilePath, 'utf-8');
-    const data = JSON.parse(fileContent);
-    setJsonData(data);
+    let parsed;
+    try {
+      parsed = JSON.parse(fileContent);
+    } catch {
+      parsed = null;
+    }
+    if (!isMountedRef || isMountedRef.current) {
+      setJsonData(parsed);
+      setLoading(false);
+    }
   } else {
-    setJsonData(null);
+    if (!isMountedRef || isMountedRef.current) {
+      setJsonData(null);
+      setLoading(false);
+    }
   }
 };
 
-const packetTypeOptions = ['TCP', 'UDP', 'ICMP', 'ARP']; // Predefined packet types
+const configFilePath = (networkId: number) =>
+  path.join(networksPath, networkId.toString(), 'volumes', 'shared_data', 'config.json');
+
+const checkConfigExists = (networkId: number) => {
+  return fs.existsSync(configFilePath(networkId));
+};
+
+const loadConfigFromFile = (networkId: number) => {
+  try {
+    const filePath = configFilePath(networkId);
+    if (fs.existsSync(filePath)) {
+      const fileContent = fs.readFileSync(filePath, 'utf-8');
+      return JSON.parse(fileContent);
+    }
+  } catch (err) {
+    console.error('Failed to load config.json:', err);
+  }
+  return null;
+};
+
+const packetTypeOptions = ['tcp', 'udp', 'icmp', 'arp']; // Predefined packet types
 
 const renderJsonData = (
   data: any,
@@ -145,20 +197,44 @@ const renderJsonData = (
   );
 };
 
+const extractTsharkError = (msg: string): string => {
+  // Find the part after "tshark:"
+  const tsharkIdx = msg.indexOf('tshark:');
+  if (tsharkIdx === -1) return msg;
+  let error = msg.slice(tsharkIdx + 7).trim();
+  // Remove anything after a line that starts with "(" (the filter expression)
+  const filterIdx = error.search(/\(.*\)\s*\^/);
+  if (filterIdx !== -1) {
+    error = error.slice(0, filterIdx).trim();
+  }
+  // Remove trailing lines after a newline if present
+  const newlineIdx = error.indexOf('\n');
+  if (newlineIdx !== -1) {
+    error = error.slice(0, newlineIdx).trim();
+  }
+  return error;
+};
+
 const NetworkMonitoringModal: React.FC<NetworkMonitoringModalProps> = ({ networkId }) => {
   //const { l } = usePrefixedTranslation('cmps.network.NetworkMonitoringModal');
   const { visible } = useStoreState(s => s.modals.networkMonitoring);
   const { hideNetworkMonitoring } = useStoreActions(s => s.modals);
+  const network = useStoreState(s => {
+    try {
+      return s.network.networkById?.(networkId);
+    } catch {
+      return undefined;
+    }
+  });
 
   const [jsonData, setJsonData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
   const [isRunning, setIsRunning] = useState(false); // Track start/stop state
-  const [isButtonDisabled, setIsButtonDisabled] = useState(false); // Disable button while waiting for response
   const [isConfigMode, setIsConfigMode] = useState(false); // Track if in configuration mode
   const [config, setConfig] = useState({
     ip: '',
     port: '',
-    packetType: '',
-    protocol: '',
+    protocol: '', // use protocol only
     sourceIp: '',
     destinationIp: '',
     sourcePort: '',
@@ -171,22 +247,96 @@ const NetworkMonitoringModal: React.FC<NetworkMonitoringModalProps> = ({ network
     macAddress: '',
   }); // Store configuration fields
   const [expandedState, setExpandedState] = useState<boolean[]>([]);
+  const [configExists, setConfigExists] = useState(false);
+  const [isBusy, setIsBusy] = useState(false); // Unified busy state
+  const [configErrorMsg, setConfigErrorMsg] = useState<string | null>(null);
+
+  // Track which PCAP file is being used
+  const [pcapFileName, setPcapFileName] = useState<string | null>(null);
+
+  // Ref to track the previous value of isConfigMode
+  const prevConfigMode = useRef(false);
+
+  // Ref to track if component is mounted
+  const isMountedRef = useRef(true);
+  const networkStatus = network?.status;
 
   useEffect(() => {
+    if (!network && visible) {
+      hideNetworkMonitoring();
+    }
+  }, [network, visible, hideNetworkMonitoring]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  // Always check config and load files together when modal is opened
+  useEffect(() => {
     if (visible) {
-      fetchJsonData(setJsonData, networkId); // Pass networkId to fetchJsonData
+      const configNowExists = checkConfigExists(networkId);
+      setConfigExists(configNowExists);
+      fetchJsonData(setJsonData, setLoading, networkId, configNowExists, isMountedRef);
+      const pcapInfo = getPcapFileInfo(networkId, configNowExists);
+      setPcapFileName(pcapInfo ? pcapInfo.name : null);
+    }
+    // Optionally, clear data when modal closes
+    if (!visible) {
+      setJsonData(null);
+      setExpandedState([]);
     }
   }, [visible, networkId]);
 
   useEffect(() => {
-    if (jsonData && Array.isArray(jsonData)) {
-      setExpandedState(new Array(jsonData.length).fill(false)); // Initialize expanded state for all items
+    if (Array.isArray(jsonData)) {
+      setExpandedState(new Array(jsonData.length).fill(false));
+      setPage(1); // Reset to first page when data changes
     }
   }, [jsonData]);
 
-  const handleButtonClick = async () => {
-    setIsButtonDisabled(true); // Disable button
-    const url = isRunning ? 'http://localhost:5007/stop' : 'http://localhost:5007/start';
+  useEffect(() => {
+    // Only load config from file when entering config mode
+    if (isConfigMode && !prevConfigMode.current) {
+      if (configExists) {
+        const loaded = loadConfigFromFile(networkId);
+        if (loaded) setConfig({ ...config, ...loaded });
+      } else {
+        setConfig({
+          ip: '',
+          port: '',
+          protocol: '',
+          sourceIp: '',
+          destinationIp: '',
+          sourcePort: '',
+          destinationPort: '',
+          packetSizeMin: '',
+          packetSizeMax: '',
+          timeRange: '',
+          tcpFlags: '',
+          payloadContent: '',
+          macAddress: '',
+        });
+      }
+    }
+    prevConfigMode.current = isConfigMode;
+  }, [isConfigMode, configExists, networkId]);
+
+  // Sync isRunning with network status: if network is stopped, monitoring must be stopped
+  useEffect(() => {
+    if (networkStatus === 3 /* Status.Stopped */ && isRunning) {
+      setIsRunning(false);
+    }
+  }, [networkStatus, isRunning]);
+
+  const handleStartStop = async () => {
+    setIsBusy(true);
+    const port = `39${networkId.toString().padStart(3, '0')}`; // Dynamically calculate port
+    const url = isRunning
+      ? `http://localhost:${port}/stop` // Stop command
+      : `http://localhost:${port}/start`; // Start command
 
     try {
       const response = await fetch(url, { method: 'GET', mode: 'no-cors' }); // Set mode to 'no-cors'
@@ -194,7 +344,7 @@ const NetworkMonitoringModal: React.FC<NetworkMonitoringModalProps> = ({ network
         console.log('State toggled successfully');
         if (isRunning) {
           // Stop mode: Reload JSON data
-          await fetchJsonData(setJsonData, networkId);
+          await fetchJsonData(setJsonData, setLoading, networkId, configExists);
         } else {
           // Start mode: Clear JSON data
           setJsonData(null);
@@ -206,7 +356,78 @@ const NetworkMonitoringModal: React.FC<NetworkMonitoringModalProps> = ({ network
     } catch (error) {
       console.error('Error during request:', error);
     } finally {
-      setIsButtonDisabled(false); // Re-enable button
+      setIsBusy(false);
+    }
+  };
+
+  const handleSaveConfig = async () => {
+    setIsBusy(true);
+    setConfigErrorMsg(null);
+    const port = `39${networkId.toString().padStart(3, '0')}`;
+    const url = `http://localhost:${port}/config`;
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+
+      if (response.status === 422) {
+        const data = await response.json();
+        let errorMsg = data?.error || 'Configuration saved but filtering failed';
+        errorMsg = extractTsharkError(errorMsg);
+        setConfigErrorMsg(errorMsg);
+        setConfigExists(true);
+        fetchJsonData(setJsonData, setLoading, networkId, false, isMountedRef);
+      } else if (response.ok) {
+        setConfigErrorMsg(null);
+        setConfigExists(true);
+        fetchJsonData(setJsonData, setLoading, networkId, true, isMountedRef);
+      } else {
+        console.error('Failed to save configuration:', response.statusText);
+      }
+    } catch (error) {
+      console.error('Error during configuration save:', error);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleClearConfig = async () => {
+    setIsBusy(true);
+    const port = `39${networkId.toString().padStart(3, '0')}`;
+    const url = `http://localhost:${port}/cleanConf`;
+    try {
+      const response = await fetch(url, { method: 'GET' });
+      if (response.ok) {
+        console.log('Configuration and filtered files cleaned.');
+        setConfigExists(false);
+        // Reload JSON data after config is cleared
+        fetchJsonData(setJsonData, setLoading, networkId, false, isMountedRef);
+      } else {
+        console.error('Failed to clean configuration:', response.statusText);
+      }
+    } catch (error) {
+      console.error('Error during configuration clean:', error);
+    } finally {
+      // Always clear the form fields, regardless of fetch result
+      setConfig({
+        ip: '',
+        port: '',
+        protocol: '',
+        sourceIp: '',
+        destinationIp: '',
+        sourcePort: '',
+        destinationPort: '',
+        packetSizeMin: '',
+        packetSizeMax: '',
+        timeRange: '',
+        tcpFlags: '',
+        payloadContent: '',
+        macAddress: '',
+      });
+      setIsBusy(false);
     }
   };
 
@@ -214,166 +435,302 @@ const NetworkMonitoringModal: React.FC<NetworkMonitoringModalProps> = ({ network
     setConfig(prev => ({ ...prev, [field]: value }));
   };
 
-  const handlePacketTypeChange = (values: string[]) => {
-    setConfig(prev => ({ ...prev, packetType: values.join(', ') })); // Store selected packet types as a comma-separated string
-  };
+  // Helper: get selected types as lowercase array from protocol
+  const selectedTypes = config.protocol
+    ? config.protocol.split(',').map(t => t.trim().toLowerCase())
+    : [];
+
+  const isTcpSelected = selectedTypes.includes('tcp');
+  const isUdpSelected = selectedTypes.includes('udp');
+  const isPortRelevant = isTcpSelected || isUdpSelected;
 
   const toggleExpanded = (index: number) => {
     setExpandedState(prevState => {
       const newState = [...prevState];
-      newState[index] = !newState[index];
+      newState[index] = !prevState[index];
       return newState;
     });
   };
 
-  const isTcpSelected = config.packetType.split(', ').includes('TCP'); // Check if TCP is selected
-  const isUdpSelected = config.packetType.split(', ').includes('UDP'); // Check if UDP is selected
+  // Store Monitoring handler
+  const handleStoreMonitoring = async () => {
+    const pcapInfo = getPcapFileInfo(networkId, configExists);
+    if (!pcapInfo) {
+      dialog.showErrorBox(
+        'No PCAP file found',
+        'There is no filtered.pcap or merged.pcap to store.',
+      );
+      return;
+    }
+    const result = await dialog.showSaveDialog({
+      title: 'Save Monitoring PCAP',
+      defaultPath: pcapInfo.name,
+      filters: [{ name: 'PCAP Files', extensions: ['pcap'] }],
+    });
+    if (!result.canceled && result.filePath) {
+      try {
+        fs.copyFileSync(pcapInfo.path, result.filePath);
+        dialog.showMessageBox({
+          message: 'PCAP file saved successfully.',
+          buttons: ['OK'],
+        });
+      } catch (err) {
+        dialog.showErrorBox('Error', 'Failed to save the PCAP file.');
+      }
+    }
+  };
+
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
+
+  // Pagination logic for JSON data
+  const paginatedJsonData = Array.isArray(jsonData)
+    ? jsonData.slice((page - 1) * pageSize, page * pageSize)
+    : jsonData;
+
+  // Place the guard here, after all hooks
+  if (!network) {
+    return null;
+  }
 
   return (
     <Modal
       //title={l('title')}
-      title={'Network Monitoring'}
+      title={'Network Packet Monitoring'}
       open={visible}
       onCancel={() => hideNetworkMonitoring()}
       footer={null}
       destroyOnClose
       width={'80%'}
-      style={{ maxHeight: '100vh', overflowY: 'auto' }} // Use viewport height for consistency
+      bodyStyle={{
+        maxHeight: '80vh',
+        overflowY: 'auto',
+      }}
     >
-      <Title level={4}>{isConfigMode ? 'Configuration' : 'Monitoring modal'}</Title>
+      <Title level={4}>
+        {isConfigMode ? 'Packet Filter Configuration' : 'Packet Monitoring'}
+      </Title>
       <Text>
         {isConfigMode
-          ? 'Define your configuration settings below.'
-          : 'Monitoring Description'}
+          ? 'Configure packet capture filters and monitoring options.'
+          : pcapFileName
+          ? 'using the base file: ' + pcapFileName
+          : 'View captured network packets and details.'}
       </Text>
       <div style={{ marginTop: 20, display: 'flex', gap: '10px' }}>
-        <Button
-          type="primary"
-          onClick={handleButtonClick}
-          disabled={isButtonDisabled} // Disable button while waiting for response
-        >
-          {isRunning ? 'Stop' : 'Start'}
-        </Button>
+        {!isConfigMode && (
+          <>
+            <Button type="primary" onClick={handleStartStop} disabled={isBusy}>
+              {isRunning ? 'Stop' : 'Start'}
+            </Button>
+            <Button type="default" onClick={handleStoreMonitoring} disabled={isBusy}>
+              Store Monitoring
+            </Button>
+          </>
+        )}
         <Button
           type="default"
           onClick={() => setIsConfigMode(!isConfigMode)} // Toggle configuration mode
+          disabled={isBusy}
         >
           {isConfigMode ? 'Back to Monitoring' : 'Configuration'}
         </Button>
+        {isConfigMode && (
+          <>
+            <Button
+              type="primary"
+              onClick={handleSaveConfig} // Save configuration changes
+              disabled={isBusy}
+            >
+              Save Configuration
+            </Button>
+            {configExists && (
+              <Button type="default" danger onClick={handleClearConfig} disabled={isBusy}>
+                Clear Configuration
+              </Button>
+            )}
+          </>
+        )}
       </div>
       <div style={{ marginTop: 20 }}>
         {isConfigMode ? (
-          <Form layout="vertical">
-            <Form.Item label="IP Address">
-              <Input
-                value={config.ip}
-                onChange={e => handleConfigChange('ip', e.target.value)}
-                placeholder="Enter IP Address"
+          <>
+            {configErrorMsg && (
+              <Alert
+                message={`Configuration saved but filtering failed: ${configErrorMsg}`}
+                type="warning"
+                showIcon
+                style={{ marginBottom: 16 }}
               />
-            </Form.Item>
-            <Form.Item label="Port">
-              <Input
-                value={config.port}
-                onChange={e => handleConfigChange('port', e.target.value)}
-                placeholder="Enter Port"
-              />
-            </Form.Item>
-            <Form.Item label="Packet Type">
-              <Select
-                mode="multiple" // Allow multiple selections
-                allowClear
-                placeholder="Select or enter packet types"
-                value={config.packetType ? config.packetType.split(', ') : []} // Ensure no empty option is selected
-                onChange={handlePacketTypeChange}
-                options={packetTypeOptions.map(type => ({ value: type, label: type }))}
-              />
-            </Form.Item>
-            <Form.Item label="Protocol">
-              <Input
-                value={config.protocol}
-                onChange={e => handleConfigChange('protocol', e.target.value)}
-                placeholder="Enter Protocol (e.g., TCP, UDP)"
-              />
-            </Form.Item>
-            <Form.Item label="Source IP">
-              <Input
-                value={config.sourceIp}
-                onChange={e => handleConfigChange('sourceIp', e.target.value)}
-                placeholder="Enter Source IP"
-              />
-            </Form.Item>
-            <Form.Item label="Destination IP">
-              <Input
-                value={config.destinationIp}
-                onChange={e => handleConfigChange('destinationIp', e.target.value)}
-                placeholder="Enter Destination IP"
-              />
-            </Form.Item>
-            <Form.Item label="Source Port">
-              <Input
-                value={config.sourcePort}
-                onChange={e => handleConfigChange('sourcePort', e.target.value)}
-                placeholder="Enter Source Port"
-              />
-            </Form.Item>
-            <Form.Item label="Destination Port">
-              <Input
-                value={config.destinationPort}
-                onChange={e => handleConfigChange('destinationPort', e.target.value)}
-                placeholder="Enter Destination Port"
-              />
-            </Form.Item>
-            <Form.Item label="Packet Size (Min)">
-              <Input
-                value={config.packetSizeMin}
-                onChange={e => handleConfigChange('packetSizeMin', e.target.value)}
-                placeholder="Enter Minimum Packet Size"
-              />
-            </Form.Item>
-            <Form.Item label="Packet Size (Max)">
-              <Input
-                value={config.packetSizeMax}
-                onChange={e => handleConfigChange('packetSizeMax', e.target.value)}
-                placeholder="Enter Maximum Packet Size"
-              />
-            </Form.Item>
-            <Form.Item label="Time Range">
-              <Input
-                value={config.timeRange}
-                onChange={e => handleConfigChange('timeRange', e.target.value)}
-                placeholder="Enter Time Range"
-              />
-            </Form.Item>
-            {isTcpSelected && (
-              <Form.Item label="TCP Flags">
+            )}
+            <Form layout="vertical">
+              <Form.Item label="IP Address">
                 <Input
-                  value={config.tcpFlags}
-                  onChange={e => handleConfigChange('tcpFlags', e.target.value)}
-                  placeholder="Enter TCP Flags (e.g., SYN, ACK)"
+                  value={config.ip}
+                  onChange={e => handleConfigChange('ip', e.target.value)}
+                  placeholder="Enter IP Address"
                 />
               </Form.Item>
-            )}
-            {isUdpSelected && (
-              <Form.Item label="Payload Content">
-                <Input
-                  value={config.payloadContent}
-                  onChange={e => handleConfigChange('payloadContent', e.target.value)}
-                  placeholder="Enter Payload Content"
+              {/* Only show Port if TCP or UDP is selected */}
+              {isPortRelevant && (
+                <Form.Item label="Port">
+                  <Input
+                    value={config.port}
+                    onChange={e => handleConfigChange('port', e.target.value)}
+                    placeholder="Enter Port"
+                  />
+                </Form.Item>
+              )}
+              <Form.Item label="Protocol">
+                <Select
+                  mode="multiple"
+                  allowClear
+                  placeholder="Select or enter protocol types"
+                  value={config.protocol ? config.protocol.split(', ') : []}
+                  onChange={(values: string[]) =>
+                    handleConfigChange('protocol', values.join(', '))
+                  }
+                  options={packetTypeOptions.map(type => ({ value: type, label: type }))}
                 />
               </Form.Item>
-            )}
-            <Form.Item label="MAC Address">
-              <Input
-                value={config.macAddress}
-                onChange={e => handleConfigChange('macAddress', e.target.value)}
-                placeholder="Enter MAC Address"
+              <Form.Item label="Source IP">
+                <Input
+                  value={config.sourceIp}
+                  onChange={e => handleConfigChange('sourceIp', e.target.value)}
+                  placeholder="Enter Source IP"
+                />
+              </Form.Item>
+              <Form.Item label="Destination IP">
+                <Input
+                  value={config.destinationIp}
+                  onChange={e => handleConfigChange('destinationIp', e.target.value)}
+                  placeholder="Enter Destination IP"
+                />
+              </Form.Item>
+              {/* Only show Source/Destination Port if TCP or UDP is selected */}
+              {isPortRelevant && (
+                <>
+                  <Form.Item label="Source Port">
+                    <Input
+                      value={config.sourcePort}
+                      onChange={e => handleConfigChange('sourcePort', e.target.value)}
+                      placeholder="Enter Source Port"
+                    />
+                  </Form.Item>
+                  <Form.Item label="Destination Port">
+                    <Input
+                      value={config.destinationPort}
+                      onChange={e =>
+                        handleConfigChange('destinationPort', e.target.value)
+                      }
+                      placeholder="Enter Destination Port"
+                    />
+                  </Form.Item>
+                </>
+              )}
+              <Form.Item label="Packet Size (Min)">
+                <Input
+                  value={config.packetSizeMin}
+                  onChange={e => handleConfigChange('packetSizeMin', e.target.value)}
+                  placeholder="Enter Minimum Packet Size"
+                />
+              </Form.Item>
+              <Form.Item label="Packet Size (Max)">
+                <Input
+                  value={config.packetSizeMax}
+                  onChange={e => handleConfigChange('packetSizeMax', e.target.value)}
+                  placeholder="Enter Maximum Packet Size"
+                />
+              </Form.Item>
+              <Form.Item label="Time Range">
+                <Input
+                  value={config.timeRange}
+                  onChange={e => handleConfigChange('timeRange', e.target.value)}
+                  placeholder="Enter Time Range"
+                />
+              </Form.Item>
+              {/* Only show TCP Flags if TCP is selected */}
+              {isTcpSelected && (
+                <Form.Item label="TCP Flags">
+                  <Input
+                    value={config.tcpFlags}
+                    onChange={e => handleConfigChange('tcpFlags', e.target.value)}
+                    placeholder="Enter TCP Flags (e.g., SYN, ACK)"
+                  />
+                </Form.Item>
+              )}
+              {/* Only show Payload Content if UDP is selected */}
+              {isUdpSelected && (
+                <Form.Item label="Payload Content">
+                  <Input
+                    value={config.payloadContent}
+                    onChange={e => handleConfigChange('payloadContent', e.target.value)}
+                    placeholder="Enter Payload Content"
+                  />
+                </Form.Item>
+              )}
+              <Form.Item label="MAC Address">
+                <Input
+                  value={config.macAddress}
+                  onChange={e => handleConfigChange('macAddress', e.target.value)}
+                  placeholder="Enter MAC Address"
+                />
+              </Form.Item>
+            </Form>
+          </>
+        ) : loading ? (
+          <Text type="secondary">Loading captured packet data...</Text>
+        ) : Array.isArray(jsonData) ? (
+          jsonData.length === 0 ? (
+            <Alert
+              message="No packets match the current filter settings."
+              type="warning"
+              showIcon
+              style={{ marginTop: 16 }}
+            />
+          ) : (
+            <>
+              <div
+                style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}
+              >
+                <span>Page size:</span>
+                <Select
+                  value={pageSize}
+                  style={{ width: 100 }}
+                  onChange={val => setPageSize(val)}
+                  options={[50, 100, 500, 1000].map(size => ({
+                    value: size,
+                    label: size,
+                  }))}
+                />
+                <span style={{ marginLeft: 'auto' }}>{jsonData.length} packets</span>
+              </div>
+              {renderJsonData(paginatedJsonData, expandedState, toggleExpanded)}
+              <Pagination
+                current={page}
+                pageSize={pageSize}
+                total={jsonData.length}
+                onChange={setPage}
+                showSizeChanger={false}
+                style={{ marginTop: 12, textAlign: 'center' }}
               />
-            </Form.Item>
-          </Form>
-        ) : jsonData ? (
-          renderJsonData(jsonData, expandedState, toggleExpanded) // Pass expanded state and toggle function
+            </>
+          )
+        ) : isRunning ? (
+          <Alert
+            message="Monitoring is active. Captured packets will appear here."
+            type="info"
+            showIcon
+            style={{ marginTop: 16 }}
+          />
         ) : (
-          <Text type="secondary">Loading JSON data...</Text>
+          <Alert
+            message="No packet data available. Start monitoring to capture packets."
+            type="warning"
+            showIcon
+            style={{ marginTop: 16 }}
+          />
         )}
       </div>
     </Modal>

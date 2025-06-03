@@ -24,7 +24,6 @@ import {
   controller,
   monitor,
 } from './nodeTemplates';
-import { net } from 'electron';
 
 export interface PartialComposeService {
   image: string;
@@ -43,7 +42,7 @@ export interface ComposeService extends PartialComposeService {
   hostname: string;
   ports: string[];
 }
-export interface MonitrComposeService extends PartialComposeService {
+export interface MonitorComposeService extends PartialComposeService {
   depends_on?: string[];
   network_mode?: string;
 }
@@ -51,7 +50,7 @@ export interface MonitrComposeService extends PartialComposeService {
 export interface ComposeContent {
   name: string;
   services: {
-    [key: string]: ComposeService | MonitrComposeService;
+    [key: string]: ComposeService | MonitorComposeService;
   };
 }
 
@@ -65,9 +64,8 @@ class ComposeFile {
     };
   }
 
-  addService(service: ComposeService | MonitrComposeService) {
-    this.content.services[service.container_name] = {
-      // TODO: try to correct for hostname
+  addService(service: ComposeService | MonitorComposeService) {
+    const serviceObj = {
       environment: {
         USERID: '${USERID:-1000}',
         GROUPID: '${GROUPID:-1000}',
@@ -75,6 +73,13 @@ class ComposeFile {
       stop_grace_period: '30s',
       ...service,
     };
+    if (service.hostname) {
+      // For legacy nodes, use hostname as key
+      this.content.services[service.hostname] = serviceObj;
+    } else if (service.container_name) {
+      // For monitor nodes, use container_name as key
+      this.content.services[service.container_name] = serviceObj;
+    }
   }
   //TODO:solve the almost redundant networkID problem
   addBitcoind(node: BitcoinNode) {
@@ -98,7 +103,7 @@ class ComposeFile {
   }
 
   //TODO:solve the almost redundant networkID problem
-  addLnd(node: LndNode, backend: CommonNode, networkId: number) {
+  addLnd(node: LndNode, backend: CommonNode) {
     const { name, version, ports } = node;
     const { rest, grpc, p2p } = ports;
     const container = getContainerName(node);
@@ -119,11 +124,11 @@ class ComposeFile {
     // add the docker service
     const svc = lnd(name, container, image, rest, grpc, p2p, command);
     this.addService(svc);
-    this.addMonitor(container, networkId);
+    this.addMonitor(container, name);
   }
 
   //TODO:solve the almost redundant networkID problem
-  addClightning(node: CLightningNode, backend: CommonNode, networkId: number) {
+  addClightning(node: CLightningNode, backend: CommonNode) {
     const { name, version, ports } = node;
     const { rest, p2p, grpc } = ports;
     const container = getContainerName(node);
@@ -146,11 +151,11 @@ class ComposeFile {
     // add the docker service
     const svc = clightning(name, container, image, rest, grpc, p2p, command);
     this.addService(svc);
-    this.addMonitor(container, networkId);
+    this.addMonitor(container, name);
   }
 
   //TODO:solve the almost redundant networkID problem
-  addEclair(node: EclairNode, backend: CommonNode, networkId: number) {
+  addEclair(node: EclairNode, backend: CommonNode) {
     const { name, version, ports } = node;
     const { rest, p2p } = ports;
     const container = getContainerName(node);
@@ -171,11 +176,11 @@ class ComposeFile {
     // add the docker service
     const svc = eclair(name, container, image, rest, p2p, command);
     this.addService(svc);
-    this.addMonitor(container, networkId);
+    this.addMonitor(container, name);
   }
 
   //TODO:solve the almost redundant networkID problem
-  addLitd(node: LitdNode, backend: CommonNode, networkId: number) {
+  addLitd(node: LitdNode, backend: CommonNode) {
     const { name, version, ports } = node;
     const { rest, grpc, p2p, web } = ports;
     const container = getContainerName(node);
@@ -197,11 +202,11 @@ class ComposeFile {
     // add the docker service
     const svc = litd(name, container, image, rest, grpc, p2p, web, command);
     this.addService(svc);
-    this.addMonitor(container, networkId);
+    this.addMonitor(container, name);
   }
 
   //TODO:solve the almost redundant networkID problem
-  addTapd(node: TapdNode, lndBackend: LndNode, networkId: number) {
+  addTapd(node: TapdNode, lndBackend: LndNode) {
     const { name, version, ports } = node;
     const { rest, grpc } = ports;
     const container = getContainerName(node);
@@ -220,7 +225,7 @@ class ComposeFile {
     // add the docker service
     const svc = tapd(name, container, image, rest, grpc, lndBackend.name, command);
     this.addService(svc);
-    this.addMonitor(container, networkId);
+    this.addMonitor(container, name);
   }
 
   addController(networkId: number) {
@@ -228,8 +233,8 @@ class ComposeFile {
     this.addService(svc);
   }
 
-  addMonitor(containerName: string, networkId: number) {
-    const svc = monitor(containerName, networkId);
+  addMonitor(containerName: string, hostname: string) {
+    const svc = monitor(containerName, hostname);
     this.addService(svc);
   }
 

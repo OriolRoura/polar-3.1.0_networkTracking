@@ -176,7 +176,10 @@
       "!<rootDir>/src/components/designer/custom/*.tsx",
       "!<rootDir>/src/utils/tests/**/*.{ts,tsx}"
     ],
-    "resetMocks": true
+    "resetMocks": true,
+    "transformIgnorePatterns": [
+      "/node_modules/(?!strip-ansi|ansi-regex).+\\.js$"
+    ]
   },
   "eslintConfig": {
     "extends": "react-app"
